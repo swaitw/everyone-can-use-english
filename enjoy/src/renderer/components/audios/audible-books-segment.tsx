@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogFooter,
+  Progress,
 } from "@renderer/components/ui";
 import { t } from "i18next";
 import { MediaPlayer, MediaProvider } from "@vidstack/react";
@@ -27,10 +28,12 @@ export const AudibleBooksSegment = () => {
     null
   );
   const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   const downloadSample = () => {
     if (!selectedBook.sample) return;
 
+    setProgress(0);
     setDownloading(true);
     EnjoyApp.audios
       .create(selectedBook.sample, {
@@ -55,7 +58,8 @@ export const AudibleBooksSegment = () => {
 
     EnjoyApp.providers.audible
       .bestsellers()
-      .then(({ books }) => {
+      .then((res) => {
+        const { books = [] } = res || {};
         const filteredBooks =
           books?.filter((book) => book.language === "English") || [];
 
@@ -72,6 +76,22 @@ export const AudibleBooksSegment = () => {
   useEffect(() => {
     fetchAudibleBooks();
   }, []);
+
+  useEffect(() => {
+    if (!selectedBook) return;
+
+    EnjoyApp.download.onState((_, downloadState) => {
+      console.log(downloadState);
+      const { state, received, total } = downloadState;
+      if (state === "progressing") {
+        setProgress(Math.floor((received / total) * 100));
+      }
+    });
+
+    return () => {
+      EnjoyApp.download.removeAllListeners();
+    };
+  }, [selectedBook]);
 
   if (!books?.length) return null;
 
@@ -155,9 +175,15 @@ export const AudibleBooksSegment = () => {
               {downloading && (
                 <LoaderIcon className="w-4 h-4 animate-spin mr-2" />
               )}
-              {t("downloadSample")}
+              {downloading
+                ? progress < 100
+                  ? t("downloading")
+                  : t("importing")
+                : t("downloadSample")}
             </Button>
           </DialogFooter>
+
+          {downloading && progress > 0 && <Progress value={progress} />}
         </DialogContent>
       </Dialog>
     </div>

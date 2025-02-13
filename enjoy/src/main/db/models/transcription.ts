@@ -11,12 +11,14 @@ import {
   DataType,
   Unique,
 } from "sequelize-typescript";
-import { Audio, Video } from "@main/db/models";
+import { Audio, UserSetting, Video } from "@main/db/models";
 import mainWindow from "@main/window";
-import log from "electron-log/main";
+import log from "@main/logger";
 import { Client } from "@/api";
-import { WEB_API_URL, PROCESS_TIMEOUT } from "@/constants";
+import { PROCESS_TIMEOUT } from "@/constants";
 import settings from "@main/settings";
+import { AlignmentResult } from "echogarden/dist/api/Alignment";
+import { createHash } from "crypto";
 
 const logger = log.scope("db/models/transcription");
 @Table({
@@ -30,6 +32,9 @@ export class Transcription extends Model<Transcription> {
   @Default(DataType.UUIDV4)
   @Column({ primaryKey: true, type: DataType.UUID })
   id: string;
+
+  @Column(DataType.STRING)
+  language: string;
 
   @Column(DataType.UUID)
   targetId: string;
@@ -52,7 +57,10 @@ export class Transcription extends Model<Transcription> {
   model: string;
 
   @Column(DataType.JSON)
-  result: any;
+  result: Partial<AlignmentResult> & {
+    originalText?: string;
+    tokenId?: string | number;
+  };
 
   @Column(DataType.DATE)
   syncedAt: Date;
@@ -64,26 +72,42 @@ export class Transcription extends Model<Transcription> {
   video: Video;
 
   @Column(DataType.VIRTUAL)
+  get md5(): string {
+    // Calculate md5 of result
+    if (!this.result) return null;
+    return createHash("md5").update(JSON.stringify(this.result)).digest("hex");
+  }
+
+  @Column(DataType.VIRTUAL)
   get isSynced(): boolean {
     return Boolean(this.syncedAt) && this.syncedAt >= this.updatedAt;
   }
 
   async sync() {
+    if (this.isSynced) return;
     if (this.getDataValue("state") !== "finished") return;
 
     const webApi = new Client({
-      baseUrl: process.env.WEB_API_URL || WEB_API_URL,
-      accessToken: settings.getSync("user.accessToken") as string,
+      baseUrl: settings.apiUrl(),
+      accessToken: (await UserSetting.accessToken()) as string,
       logger,
     });
     return webApi.syncTranscription(this.toJSON()).then(() => {
-      this.update({ syncedAt: new Date() });
+      const now = new Date();
+      this.update({ syncedAt: now, updatedAt: now });
     });
   }
 
   @AfterUpdate
   static notifyForUpdate(transcription: Transcription) {
     this.notify(transcription, "update");
+  }
+
+  @AfterUpdate
+  static syncAfterUpdate(transcription: Transcription) {
+    transcription.sync().catch((err) => {
+      logger.error("sync transcription error", transcription.id, err);
+    });
   }
 
   @AfterDestroy
